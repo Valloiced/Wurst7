@@ -15,6 +15,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.wurstclient.hacks.automineralmine.OrderCollector;
 import net.wurstclient.hacks.automineralmine.SellHandler;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -129,13 +130,6 @@ public final class AutoMineralMineHack extends Hack
 		{{-1, 0, 0}, {0, 0, 0}, {1, 0, 0}, {-1, 1, 0}, {0, 1, 0}, {1, 1, 0},
 			{-1, 2, 0}, {0, 2, 0}, {1, 2, 0}};
 	
-	// ======================
-	// ROTATION STATE
-	// ======================
-	
-	private int rotationIndex = 0;
-	private int attemptsThisCycle = 0;
-	
 	private enum State
 	{
 		PLACING,
@@ -163,6 +157,7 @@ public final class AutoMineralMineHack extends Hack
 	private final SellHandler sellHandler = new SellHandler(MC);
 	
 	private State stateAfterSell = State.PLACING;
+	private int collectRotationIndex = 0;
 	
 	public AutoMineralMineHack()
 	{
@@ -217,8 +212,7 @@ public final class AutoMineralMineHack extends Hack
 		transitionDelayApplied = false;
 		orderCollector.reset();
 		sellHandler.reset();
-		rotationIndex = 0;
-		attemptsThisCycle = 0;
+		collectRotationIndex = 0;
 		
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
@@ -254,26 +248,10 @@ public final class AutoMineralMineHack extends Hack
 		
 		switch(currentState)
 		{
-			case PLACING ->
-			{
-				handlePlacing();
-				break;
-			}
-			case MINING ->
-			{
-				handleMining();
-				break;
-			}
-			case COLLECTING ->
-			{
-				handleCollecting();
-				break;
-			}
-			case SELLING ->
-			{
-				handleSelling();
-				break;
-			}
+			case PLACING -> handlePlacing();
+			case MINING -> handleMining();
+			case COLLECTING -> handleCollecting();
+			case SELLING -> handleSelling();
 		}
 	}
 	
@@ -307,24 +285,6 @@ public final class AutoMineralMineHack extends Hack
 			ores.add(Items.REDSTONE);
 		
 		return ores;
-	}
-	
-	private Item getNextOreInRotation()
-	{
-		List<Item> ores = getSelectedOres();
-		
-		if(ores.isEmpty())
-			return null;
-		
-		if(attemptsThisCycle >= ores.size())
-			return null;
-		
-		Item ore = ores.get(rotationIndex);
-		
-		rotationIndex = (rotationIndex + 1) % ores.size();
-		attemptsThisCycle++;
-		
-		return ore;
 	}
 	
 	private int countAllSelectedOres()
@@ -428,7 +388,6 @@ public final class AutoMineralMineHack extends Hack
 		float pitchDelta = targetPitch - currentPitch;
 		float speed = (float)rotationSpeed.getValue();
 		
-		// Snap when close enough to prevent endless oscillation
 		currentYaw =
 			Math.abs(yawDelta) < 1f ? targetYaw : currentYaw + yawDelta * speed;
 		currentPitch = Math.abs(pitchDelta) < 1f ? targetPitch
@@ -561,6 +520,8 @@ public final class AutoMineralMineHack extends Hack
 	
 	private void handleMining()
 	{
+		closeAnyOpenContainer();
+		
 		if(shouldTriggerSell())
 		{
 			beginSell(State.MINING);
@@ -589,7 +550,6 @@ public final class AutoMineralMineHack extends Hack
 		
 		smoothFaceTarget(params.hitVec());
 		
-		// Rotate first — only delay and mine once actually aimed
 		if(!isAimedAt(params.hitVec()))
 			return;
 		
@@ -606,6 +566,12 @@ public final class AutoMineralMineHack extends Hack
 			swingHand.swing(InteractionHand.MAIN_HAND);
 	}
 	
+	private void closeAnyOpenContainer()
+	{
+		if(MC.screen instanceof AbstractContainerScreen<?>)
+			MC.player.closeContainer();
+	}
+	
 	private boolean shouldTriggerCollect()
 	{
 		if(!autoCollect.isChecked())
@@ -618,21 +584,10 @@ public final class AutoMineralMineHack extends Hack
 	{
 		stateAfterCollect = returnTo;
 		
-		List<Item> ores = getSelectedOres();
-		
-		if(ores.isEmpty())
+		List<Item> candidates = getSelectedOres();
+		if(candidates.isEmpty())
 		{
 			ChatUtils.error("No ores selected!");
-			setEnabled(false);
-			return;
-		}
-		
-		Item target = getNextOreInRotation();
-		
-		if(target == null)
-		{
-			ChatUtils.error(
-				"AutoMineralMine: No orders found for any selected ore. Terminating.");
 			setEnabled(false);
 			return;
 		}
@@ -643,17 +598,19 @@ public final class AutoMineralMineHack extends Hack
 		if(desiredAmount <= 0)
 			return;
 		
+		List<Item> rotatedCandidates =
+			rotateCandidates(candidates, collectRotationIndex);
+		collectRotationIndex = (collectRotationIndex + 1) % candidates.size();
+		
 		orderCollector.reset();
 		orderCollector.setSettings(maxSlotsToPull.getValueI(),
 			minFillPct.getValueI(), false);
-		
-		orderCollector.queueCollect(target, desiredAmount);
+		orderCollector.queueCollectAny(rotatedCandidates, desiredAmount);
 		orderCollector.start();
 		
 		currentState = State.COLLECTING;
 		
-		ChatUtils.message("Collecting " + desiredAmount + "x "
-			+ new ItemStack(target).getHoverName().getString() + "...");
+		ChatUtils.message("Collecting " + desiredAmount + "x ore(s)...");
 	}
 	
 	private void handleCollecting()
@@ -661,19 +618,7 @@ public final class AutoMineralMineHack extends Hack
 		orderCollector.tick();
 		
 		if(orderCollector.isFinished())
-		{
-			// If nothing was collected → try next ore
-			if(orderCollector.getCollectedAmount() == 0)
-			{
-				beginCollect(stateAfterCollect);
-				return;
-			}
-			
-			// success → reset rotation attempts
-			attemptsThisCycle = 0;
-			
 			finishCollect();
-		}
 	}
 	
 	private void finishCollect()
@@ -682,6 +627,19 @@ public final class AutoMineralMineHack extends Hack
 		currentState = stateAfterCollect;
 		delayTimer = collectGuiDelay.getValueI() * 3;
 		ChatUtils.message("AutoMineralMine: Collection finished. Resuming.");
+	}
+	
+	private List<Item> rotateCandidates(List<Item> items, int startIndex)
+	{
+		List<Item> rotated = new ArrayList<>();
+		if(items == null || items.isEmpty())
+			return rotated;
+		
+		int size = items.size();
+		for(int i = 0; i < size; i++)
+			rotated.add(items.get((startIndex + i) % size));
+		
+		return rotated;
 	}
 	
 	private List<BlockPos> getEmptySpots()

@@ -8,6 +8,7 @@
 package net.wurstclient.hacks.automineralmine;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
 
@@ -49,12 +50,13 @@ public class OrderCollector
 	
 	public static class CollectTask
 	{
-		public final Item item;
+		public final List<Item> candidates;
 		public final int amount;
 		
-		public CollectTask(Item item, int amount)
+		public CollectTask(List<Item> candidates, int amount)
 		{
-			this.item = item;
+			this.candidates = candidates == null ? new ArrayList<>()
+				: new ArrayList<>(candidates);
 			this.amount = amount;
 		}
 	}
@@ -75,6 +77,8 @@ public class OrderCollector
 	private int quickMoveRetries = 0;
 	private int pulledSlots = 0;
 	
+	private final List<Item> foundValidOres = new ArrayList<>();
+	
 	public OrderCollector(Minecraft mc)
 	{
 		this.MC = mc;
@@ -93,12 +97,27 @@ public class OrderCollector
 		return collectedAmount;
 	}
 	
+	public List<Item> getFoundValidOres()
+	{
+		return new ArrayList<>(foundValidOres);
+	}
+	
 	public void queueCollect(Item item, int amount)
 	{
 		if(item == null || amount <= 0)
 			return;
 		
-		taskQueue.add(new CollectTask(item, amount));
+		List<Item> candidates = new ArrayList<>();
+		candidates.add(item);
+		taskQueue.add(new CollectTask(candidates, amount));
+	}
+	
+	public void queueCollectAny(List<Item> candidates, int amount)
+	{
+		if(candidates == null || candidates.isEmpty() || amount <= 0)
+			return;
+		
+		taskQueue.add(new CollectTask(candidates, amount));
 	}
 	
 	public void start()
@@ -123,6 +142,7 @@ public class OrderCollector
 		pulledSlots = 0;
 		collectedThisTask = 0;
 		collectedAmount = 0;
+		foundValidOres.clear();
 	}
 	
 	public void abort()
@@ -194,12 +214,15 @@ public class OrderCollector
 			return;
 		}
 		
-		targetItem = activeTask.item;
 		stage = Stage.OPEN_ORDERS;
 		delay = 10;
 		
-		ChatUtils.message("Collector: Starting " + activeTask.amount + "x "
-			+ targetItem.getName(new ItemStack(targetItem)).getString());
+		String label = activeTask.candidates.isEmpty() ? "unknown"
+			: activeTask.candidates.get(0)
+				.getName(new ItemStack(activeTask.candidates.get(0)))
+				.getString();
+		ChatUtils
+			.message("Collector: Starting " + activeTask.amount + "x " + label);
 	}
 	
 	private void openOrders()
@@ -219,9 +242,7 @@ public class OrderCollector
 			stage = Stage.CLICK_SLOT_51;
 			delay = 5;
 		}else
-		{
 			retry();
-		}
 	}
 	
 	private void clickSlot51()
@@ -250,9 +271,7 @@ public class OrderCollector
 			stage = Stage.CLICK_TARGET_ORDER_SLOT;
 			delay = 5;
 		}else
-		{
 			retry();
-		}
 	}
 	
 	private void clickTargetOrderSlot()
@@ -261,9 +280,71 @@ public class OrderCollector
 		if(menu == null)
 			return;
 		
-		int foundIndex = -1;
+		int containerSlots = getContainerSlotCount(menu);
+		List<Item> availableItems = new ArrayList<>();
 		
-		for(int i = 0; i < menu.slots.size(); i++)
+		for(int i = 0; i < containerSlots; i++)
+		{
+			Slot s = menu.slots.get(i);
+			if(s == null || !s.hasItem())
+				continue;
+			
+			ItemStack st = s.getItem();
+			if(st == null || st.isEmpty())
+				continue;
+			
+			if(shouldCollectOrder(st))
+			{
+				Item item = st.getItem();
+				if(activeTask == null || activeTask.candidates.isEmpty())
+				{
+					if(!availableItems.contains(item))
+						availableItems.add(item);
+					continue;
+				}
+				
+				if(activeTask.candidates.contains(item)
+					&& !availableItems.contains(item))
+				{
+					availableItems.add(item);
+				}
+			}
+		}
+		
+		if(availableItems.isEmpty())
+		{
+			ChatUtils.message("Collect: No matching orders found.");
+			stage = Stage.FINISH_CYCLE;
+			delay = 0;
+			return;
+		}
+		
+		Item chosenItem = null;
+		if(activeTask != null && !activeTask.candidates.isEmpty())
+		{
+			for(Item candidate : activeTask.candidates)
+			{
+				if(availableItems.contains(candidate))
+				{
+					chosenItem = candidate;
+					break;
+				}
+			}
+		}else
+			chosenItem = availableItems.get(0);
+		
+		if(chosenItem == null)
+		{
+			ChatUtils.message("Collect: No matching orders found.");
+			stage = Stage.FINISH_CYCLE;
+			delay = 0;
+			return;
+		}
+		
+		targetItem = chosenItem;
+		
+		int foundIndex = -1;
+		for(int i = 0; i < containerSlots; i++)
 		{
 			Slot s = menu.slots.get(i);
 			if(s == null || !s.hasItem())
@@ -297,9 +378,7 @@ public class OrderCollector
 			stage = Stage.CLICK_COLLECT_BUTTON;
 			delay = 5;
 		}else
-		{
 			retry();
-		}
 	}
 	
 	private void clickCollectButton()
@@ -341,9 +420,7 @@ public class OrderCollector
 			stage = Stage.SCAN_AND_COLLECT;
 			delay = 5;
 		}else
-		{
 			retry();
-		}
 	}
 	
 	private void scanAndCollect()
@@ -490,6 +567,7 @@ public class OrderCollector
 			MC.player.closeContainer();
 		
 		activeTask = null;
+		targetItem = null;
 		
 		if(taskQueue.isEmpty())
 		{
@@ -526,6 +604,11 @@ public class OrderCollector
 	{
 		stage = Stage.OPEN_ORDERS;
 		delay = 20;
+	}
+	
+	private static int getContainerSlotCount(AbstractContainerMenu menu)
+	{
+		return Math.max(0, menu.slots.size() - 36);
 	}
 	
 	private boolean shouldCollectOrder(ItemStack orderStack)
