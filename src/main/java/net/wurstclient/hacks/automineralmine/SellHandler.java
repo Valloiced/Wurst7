@@ -327,7 +327,7 @@ public final class SellHandler
 		if(mc.screen instanceof AbstractContainerScreen<?> screen)
 		{
 			mc.gameMode.handleInventoryMouseClick(screen.getMenu().containerId,
-				11, 0, ClickType.PICKUP, mc.player);
+				15, 0, ClickType.PICKUP, mc.player);
 		}
 		
 		advanceTo(Stage.VERIFY_DELIVERY);
@@ -350,6 +350,7 @@ public final class SellHandler
 			ChatUtils.warning("SellHandler: Sell failed.");
 		}
 		
+		closeAnyOpenContainer();
 		advanceTo(Stage.DONE);
 	}
 	
