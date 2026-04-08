@@ -10,6 +10,7 @@ package net.wurstclient.hacks;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -46,7 +47,6 @@ import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.autolibrarian.BookOffer;
 import net.wurstclient.hacks.autolibrarian.UpdateBooksSetting;
-import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.BookOffersSetting;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.FaceTargetSetting;
@@ -106,6 +106,18 @@ public final class AutoLibrarianHack extends Hack
 			+ "Can be adjusted from 0 (off) to 100 remaining uses.",
 		1, 0, 100, 1, ValueDisplay.INTEGER.withLabel(0, "off"));
 	
+	// --- ADDED: random pause settings ---
+	private final SliderSetting minPause = new SliderSetting("Min pause",
+		"Minimum duration of a random pause before each new training attempt,"
+			+ " in seconds.",
+		3, 1, 30, 1, ValueDisplay.INTEGER);
+	
+	private final SliderSetting maxPause = new SliderSetting("Max pause",
+		"Maximum duration of a random pause before each new training attempt,"
+			+ " in seconds.",
+		8, 1, 60, 1, ValueDisplay.INTEGER);
+	// --- END ADDED ---
+	
 	private final OverlayRenderer overlay = new OverlayRenderer();
 	private final HashSet<Villager> experiencedVillagers = new HashSet<>();
 	
@@ -114,6 +126,11 @@ public final class AutoLibrarianHack extends Hack
 	
 	private boolean placingJobSite;
 	private boolean breakingJobSite;
+	
+	// --- ADDED: pause state ---
+	private int pauseTicksRemaining;
+	private final Random random = new Random();
+	// --- END ADDED ---
 	
 	public AutoLibrarianHack()
 	{
@@ -126,6 +143,10 @@ public final class AutoLibrarianHack extends Hack
 		addSetting(faceTarget);
 		addSetting(swingHand);
 		addSetting(repairMode);
+		// --- ADDED ---
+		addSetting(minPause);
+		addSetting(maxPause);
+		// --- END ADDED ---
 	}
 	
 	@Override
@@ -153,12 +174,24 @@ public final class AutoLibrarianHack extends Hack
 		jobSite = null;
 		placingJobSite = false;
 		breakingJobSite = false;
+		// --- ADDED ---
+		pauseTicksRemaining = 0;
+		// --- END ADDED ---
 		experiencedVillagers.clear();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
+		// --- ADDED: count down random pause, but only when not actively
+		// breaking or placing (those must run uninterrupted every tick) ---
+		if(pauseTicksRemaining > 0 && !breakingJobSite && !placingJobSite)
+		{
+			pauseTicksRemaining--;
+			return;
+		}
+		// --- END ADDED ---
+		
 		if(villager == null)
 		{
 			setTargetVillager();
@@ -217,6 +250,9 @@ public final class AutoLibrarianHack extends Hack
 		{
 			ChatUtils.message("Villager is not selling an enchanted book.");
 			closeTradeScreen();
+			// --- ADDED: schedule pause before break ---
+			schedulePause();
+			// --- END ADDED ---
 			breakingJobSite = true;
 			System.out.println("Breaking job site...");
 			return;
@@ -229,6 +265,9 @@ public final class AutoLibrarianHack extends Hack
 		// if wrong enchantment, break job site and start over
 		if(!wantedBooks.isWanted(bookOffer))
 		{
+			// --- ADDED: schedule pause before break ---
+			schedulePause();
+			// --- END ADDED ---
 			breakingJobSite = true;
 			System.out.println("Breaking job site...");
 			closeTradeScreen();
@@ -258,6 +297,20 @@ public final class AutoLibrarianHack extends Hack
 		ChatUtils.message("Done!");
 		setEnabled(false);
 	}
+	
+	// --- ADDED ---
+	private void schedulePause()
+	{
+		int minTicks = minPause.getValueI() * 20;
+		int maxTicks = maxPause.getValueI() * 20;
+		if(maxTicks < minTicks)
+			maxTicks = minTicks;
+		pauseTicksRemaining =
+			minTicks + random.nextInt(maxTicks - minTicks + 1);
+		System.out.printf("[AutoLibrarian] Pausing %.1f s...%n",
+			pauseTicksRemaining / 20.0);
+	}
+	// --- END ADDED ---
 	
 	private void breakJobSite()
 	{
@@ -324,19 +377,10 @@ public final class AutoLibrarianHack extends Hack
 		InteractionHand hand = MC.player.getMainHandItem().is(Items.LECTERN)
 			? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
 		
-		// sneak-place to avoid activating trapdoors/chests/etc.
-		IKeyMapping sneakKey = IKeyMapping.get(MC.options.keyShift);
-		sneakKey.setDown(true);
-		if(!MC.player.isShiftKeyDown())
-			return;
-		
 		// get block placing params
 		BlockPlacingParams params = BlockPlacer.getBlockPlacingParams(jobSite);
 		if(params == null)
-		{
-			sneakKey.resetPressedState();
 			return;
-		}
 		
 		// face block
 		faceTarget.face(params.hitVec());
@@ -349,9 +393,6 @@ public final class AutoLibrarianHack extends Hack
 		if(result instanceof InteractionResult.Success success
 			&& success.swingSource() == InteractionResult.SwingSource.CLIENT)
 			swingHand.swing(hand);
-		
-		// reset sneak
-		sneakKey.resetPressedState();
 	}
 	
 	private void openTradeScreen()
