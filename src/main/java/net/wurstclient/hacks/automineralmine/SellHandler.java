@@ -69,7 +69,7 @@ public final class SellHandler
 	{
 		ORDER_SEARCH_NAMES.put(Items.DIAMOND, "diamonds");
 		ORDER_SEARCH_NAMES.put(Items.RAW_GOLD, "raw gold");
-		ORDER_SEARCH_NAMES.put(Items.REDSTONE, "redstone");
+		ORDER_SEARCH_NAMES.put(Items.REDSTONE, "redstone dust");
 	}
 	
 	/**
@@ -82,8 +82,8 @@ public final class SellHandler
 	static
 	{
 		ORDER_DISPLAY_LABELS.put(Items.DIAMOND, "diamond");
-		ORDER_DISPLAY_LABELS.put(Items.GOLD_INGOT, "gold ingot");
-		ORDER_DISPLAY_LABELS.put(Items.REDSTONE, "redstone");
+		ORDER_DISPLAY_LABELS.put(Items.RAW_GOLD, "raw gold");
+		ORDER_DISPLAY_LABELS.put(Items.REDSTONE, "redstone dust");
 	}
 	
 	// =========================================================================
